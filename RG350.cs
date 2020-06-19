@@ -4,7 +4,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Permissions;
+using K4os.Compression.LZ4.Streams;
 using SDL2;
+
 
 namespace stream350client
 {
@@ -17,6 +19,7 @@ namespace stream350client
     public struct Metadata
     {
         public byte BitsPerPixel;
+        public uint FrameSize;
         public ushort x;
         public ushort y;
     }
@@ -38,43 +41,47 @@ namespace stream350client
 
         private void UpdateMetadata()
         {
-            Log.Msg($"Metadata Time! Prev metadata: {Meta.BitsPerPixel}. {Meta.x}, {Meta.y}");
+            Console.WriteLine($"Metadata Time! Prev metadata: {Meta.BitsPerPixel}, {Meta.FrameSize} {Meta.x}, {Meta.y}");
             Metadata newMeta;
             newMeta.BitsPerPixel = reader.ReadByte();
+            newMeta.FrameSize = reader.ReadUInt32();
             newMeta.x = reader.ReadUInt16();
             newMeta.y = reader.ReadUInt16();
-            Log.Msg($"New metadata: {newMeta.BitsPerPixel}. {newMeta.x}, {newMeta.y}");
+            Console.WriteLine($"New metadata: {newMeta.BitsPerPixel}, {newMeta.FrameSize} {newMeta.x}, {newMeta.y}");
             if (newMeta.BitsPerPixel != Meta.BitsPerPixel || newMeta.x != Meta.x || newMeta.y != Meta.y)
             {
                 Meta = newMeta;
                 ReintializeWr();
             }
+            else if (newMeta.FrameSize != Meta.FrameSize)
+                Meta = newMeta;
         }
-        
+
         public byte[] GetFrame()
         {
-            Log.Msg($"Frame {FrameCounter}");
-            //if (++FrameCounter == 60)
-                //UpdateMetadata();
+            UpdateMetadata();
 
-            
-            var screenSize = Meta.x * Meta.y * (Meta.BitsPerPixel / 8);
-            
-            Log.Msg($"Meta: {Meta.BitsPerPixel}. {Meta.x}, {Meta.y}. SS: {screenSize}");
-            var buffer = new byte[screenSize];
+            var screenSize = (Meta.x * Meta.y * Meta.BitsPerPixel) / 8;
+
+            Log.Msg($"Meta: {Meta.BitsPerPixel}. {Meta.x}, {Meta.y}. SS: {screenSize}, comp: {Meta.FrameSize}");
+            var compBuffer = new byte[Meta.FrameSize];
 
             
             //var readLen = client.Client.Receive(buffer);
             int offset = 0;
-            while (offset < screenSize)
+            while (offset < Meta.FrameSize)
             {
-                int read = stream.Read(buffer, offset, screenSize - offset);
+                int read = stream.Read(compBuffer, offset, (int)Meta.FrameSize - offset);
                 if (read == 0)
-                    throw new System.IO.EndOfStreamException();
+                    throw new EndOfStreamException();
                 offset += read;
             }
-            
-            return buffer;
+            Stream compStream = new MemoryStream(compBuffer);
+
+            Stream outStream = LZ4Stream.Decode(compStream);
+            var decompBuffer = new byte[screenSize];
+            outStream.Read(decompBuffer);
+            return decompBuffer;
         }
 
         private void ReintializeWr()
@@ -88,7 +95,7 @@ namespace stream350client
             if (tex_mem != IntPtr.Zero)
                 SDL.SDL_free(tex_mem);
 
-            Console.WriteLine($"Meta: {Meta.BitsPerPixel}. {Meta.x}, {Meta.y}");
+            Console.WriteLine($"Meta: {Meta.BitsPerPixel}, {Meta.FrameSize}, {Meta.x}, {Meta.y}");
 
             Window = SDL.SDL_CreateWindow($"stream350client <{IP}>", SDL.SDL_WINDOWPOS_CENTERED, SDL.SDL_WINDOWPOS_CENTERED, Meta.x, Meta.y, 0);
             if (Window == IntPtr.Zero)
@@ -99,7 +106,7 @@ namespace stream350client
                 throw new Exception("Failed to initialize renderer");
             
 
-            texture = SDL.SDL_CreateTexture(Renderer, Meta.BitsPerPixel == 16 ? SDL.SDL_PIXELFORMAT_RGB565 : SDL.SDL_PIXELFORMAT_RGBX8888,
+            texture = SDL.SDL_CreateTexture(Renderer, Meta.BitsPerPixel == 16 ? SDL.SDL_PIXELFORMAT_RGB565 : SDL.SDL_PIXELFORMAT_BGRX8888,
                 (int)SDL.SDL_TextureAccess.SDL_TEXTUREACCESS_STREAMING, Meta.x, Meta.y);
 
             tex_mem = SDL.SDL_malloc((IntPtr) (Meta.x * Meta.y * Meta.BitsPerPixel / 8));
