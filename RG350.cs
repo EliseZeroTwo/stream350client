@@ -2,8 +2,11 @@ using System;
 using System.Net.Sockets;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Net.Mime;
 using System.Runtime.InteropServices;
 using System.Security.Permissions;
+using System.Text;
 using K4os.Compression.LZ4.Streams;
 using SDL2;
 
@@ -26,6 +29,12 @@ namespace stream350client
     
     public class RG350
     {
+        private static readonly Dictionary<byte, uint> PixelFormatMap = new Dictionary<byte, uint>
+        {
+            {15, SDL.SDL_PIXELFORMAT_RGB555},
+            {16, SDL.SDL_PIXELFORMAT_RGB565},
+            {32, SDL.SDL_PIXELFORMAT_RGBX8888}
+        };
 
         private IntPtr Window = IntPtr.Zero;
         private IntPtr Renderer = IntPtr.Zero;
@@ -41,13 +50,13 @@ namespace stream350client
 
         private void UpdateMetadata()
         {
-            Console.WriteLine($"Metadata Time! Prev metadata: {Meta.BitsPerPixel}, {Meta.FrameSize} {Meta.x}, {Meta.y}");
+            Log.Msg($"Metadata Time! Prev metadata: {Meta.BitsPerPixel}, {Meta.FrameSize} {Meta.x}, {Meta.y}");
             Metadata newMeta;
             newMeta.BitsPerPixel = reader.ReadByte();
             newMeta.FrameSize = reader.ReadUInt32();
             newMeta.x = reader.ReadUInt16();
             newMeta.y = reader.ReadUInt16();
-            Console.WriteLine($"New metadata: {newMeta.BitsPerPixel}, {newMeta.FrameSize} {newMeta.x}, {newMeta.y}");
+            Log.Msg($"New metadata: {newMeta.BitsPerPixel}, {newMeta.FrameSize} {newMeta.x}, {newMeta.y}");
             if (newMeta.BitsPerPixel != Meta.BitsPerPixel || newMeta.x != Meta.x || newMeta.y != Meta.y)
             {
                 Meta = newMeta;
@@ -106,7 +115,7 @@ namespace stream350client
                 throw new Exception("Failed to initialize renderer");
             
 
-            texture = SDL.SDL_CreateTexture(Renderer, Meta.BitsPerPixel == 16 ? SDL.SDL_PIXELFORMAT_RGB565 : SDL.SDL_PIXELFORMAT_BGRX8888,
+            texture = SDL.SDL_CreateTexture(Renderer, PixelFormatMap[Meta.BitsPerPixel],
                 (int)SDL.SDL_TextureAccess.SDL_TEXTUREACCESS_STREAMING, Meta.x, Meta.y);
 
             tex_mem = SDL.SDL_malloc((IntPtr) (Meta.x * Meta.y * Meta.BitsPerPixel / 8));
@@ -138,6 +147,8 @@ namespace stream350client
             while (true)
             {
                 DrawFrame();
+                var key_down_to_send = new List<ushort>();
+                var key_up_to_send = new List<ushort>();
                 while (SDL.SDL_PollEvent(out SDL.SDL_Event e) != 0)
                 {
                     switch (e.type)
@@ -146,11 +157,84 @@ namespace stream350client
                             Environment.Exit(0);
                             break;
                         case SDL.SDL_EventType.SDL_KEYDOWN:
-                            if (e.key.keysym.sym == SDL.SDL_Keycode.SDLK_q)
-                                Environment.Exit(0);
+                            if (e.key.repeat != 0)
+                                break;
+                            switch (e.key.keysym.sym)
+                            {
+                                case SDL.SDL_Keycode.SDLK_w:
+                                    key_down_to_send.Add((ushort) Keys.DPAD_UP);
+                                    break;
+                                case SDL.SDL_Keycode.SDLK_a:
+                                    key_down_to_send.Add((ushort) Keys.DPAD_LEFT);
+                                    break;
+                                case SDL.SDL_Keycode.SDLK_s:
+                                    key_down_to_send.Add((ushort) Keys.DPAD_DOWN);
+                                    break;
+                                case SDL.SDL_Keycode.SDLK_d:
+                                    key_down_to_send.Add((ushort) Keys.DPAD_RIGHT);
+                                    break;
+                                case SDL.SDL_Keycode.SDLK_q:
+                                    key_down_to_send.Add((ushort) Keys.BTN_B);
+                                    break;
+                                case SDL.SDL_Keycode.SDLK_e:
+                                    key_down_to_send.Add((ushort) Keys.BTN_A);
+                                    break;
+                                case SDL.SDL_Keycode.SDLK_z:
+                                    key_down_to_send.Add((ushort) Keys.BTN_X);
+                                    break;
+                                case SDL.SDL_Keycode.SDLK_x:
+                                    key_down_to_send.Add((ushort) Keys.BTN_Y);
+                                    break;
+                            }
+                            break;
+                        case SDL.SDL_EventType.SDL_KEYUP:
+                            switch (e.key.keysym.sym)
+                            {
+                                case SDL.SDL_Keycode.SDLK_w:
+                                    key_up_to_send.Add((ushort) Keys.DPAD_UP);
+                                    break;
+                                case SDL.SDL_Keycode.SDLK_a:
+                                    key_up_to_send.Add((ushort) Keys.DPAD_LEFT);
+                                    break;
+                                case SDL.SDL_Keycode.SDLK_s:
+                                    key_up_to_send.Add((ushort) Keys.DPAD_DOWN);
+                                    break;
+                                case SDL.SDL_Keycode.SDLK_d:
+                                    key_up_to_send.Add((ushort) Keys.DPAD_RIGHT);
+                                    break;
+                                case SDL.SDL_Keycode.SDLK_q:
+                                    key_up_to_send.Add((ushort) Keys.BTN_B);
+                                    break;
+                                case SDL.SDL_Keycode.SDLK_e:
+                                    key_up_to_send.Add((ushort) Keys.BTN_A);
+                                    break;
+                                case SDL.SDL_Keycode.SDLK_z:
+                                    key_up_to_send.Add((ushort) Keys.BTN_X);
+                                    break;
+                                case SDL.SDL_Keycode.SDLK_x:
+                                    key_up_to_send.Add((ushort) Keys.BTN_Y);
+                                    break;
+                            }
                             break;
                     }
                 }
+                stream.WriteByte((byte)key_down_to_send.Count);
+                foreach (var key in key_down_to_send)
+                {
+                    Console.WriteLine("OwO");
+                    stream.Write(BitConverter.GetBytes(key));
+                }
+
+                stream.WriteByte((byte)key_up_to_send.Count);
+                Console.WriteLine((byte)key_up_to_send.Count);
+                foreach (var key in key_up_to_send)
+                {
+                    Console.WriteLine("UwU");
+                    stream.Write(BitConverter.GetBytes(key));   
+                }
+
+                key_down_to_send.Clear();
+                key_up_to_send.Clear();
             }
         }
         
